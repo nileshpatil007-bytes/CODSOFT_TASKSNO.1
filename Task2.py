@@ -9,11 +9,11 @@ def run_calculator():
         return
 
     # 2. Get the operation choice
-    #print("\nAvailable Operations:")
-    #print(" + : Addition")
-    #print(" - : Subtraction")
-    #print(" * : Multiplication")
-    #print(" / : Division")
+    print("\nAvailable Operations:")
+    print(" + : Addition")
+    print(" - : Subtraction")
+    print(" * : Multiplication")
+    print(" / : Division")
     operation = input("Choose an operation (+, -, *, /): ").strip()
 
     # 3. Get the second number
