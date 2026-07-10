@@ -1,141 +1,206 @@
 import tkinter as tk
 from tkinter import messagebox
-from tkinter import ttk  # Imported ttk to use the modern Treeview widget
+from tkinter import ttk
 import json
 import os
 
-# The name of the file where your tasks will be stored on your computer
+# Local database file name
 DATA_FILE = "todo_data.json"
 
 class TodoApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("To-Do List Manager")
-        self.root.geometry("420x500") # Made slightly wider to fit the text perfectly
+        self.root.title("My To-Do List Pro")
+        self.root.geometry("450x580")
+        self.root.configure(bg="#f8f9fa") # Soft clean background
         
-        # Internal task list storage
+        # Internal application data
         self.todo_list = []
+        self.recently_deleted = None # Temporary home for the Undo system
         
-        # --- UI ELEMENTS ---
-        # Title Label
-        self.title_label = tk.Label(root, text="TO-DO LIST MANAGER", font=("Arial", 16, "bold"))
-        self.title_label.pack(pady=10)
+        # --- BUILD INTERFACE ---
+        self.setup_styles()
+        self.create_layout()
         
-        # Task Input Field
-        self.entry_frame = tk.Frame(root)
-        self.entry_frame.pack(pady=5)
+        # Load any history immediately
+        self.load_saved_tasks()
         
-        self.task_entry = tk.Entry(self.entry_frame, width=28, font=("Arial", 12))
-        self.task_entry.pack(side=tk.LEFT, padx=5)
+    def setup_styles(self):
+        """Sets up modern looking fonts and padding styles."""
+        self.style = ttk.Style()
+        self.style.configure("Treeview", font=("Arial", 11), rowheight=28)
+        self.style.configure("TScrollbar", gripcount=0)
         
-        self.add_button = tk.Button(self.entry_frame, text="Add Task", command=self.add_task, bg="green", fg="white")
-        self.add_button.pack(side=tk.LEFT)
+    def create_layout(self):
+        """Assembles the entire interface piece by piece."""
+        # 1. Header Title
+        title = tk.Label(self.root, text="✨ My Daily Tasks ✨", font=("Arial", 16, "bold"), bg="#f8f9fa", fg="#2c3e50")
+        title.pack(pady=15)
         
-        # --- UPGRADED TASK DISPLAY (Treeview instead of Listbox) ---
-        # This widget allows individual text styles and row coloring.
-        self.tree = ttk.Treeview(root, columns=("Tasks"), show="", height=15)
-        self.tree.pack(pady=15, padx=20, fill=tk.BOTH, expand=True)
+        # 2. Input Box Area
+        entry_frame = tk.Frame(self.root, bg="#f8f9fa")
+        entry_frame.pack(pady=5, padx=20, fill="x")
         
-        # Configure the column width and text size
-        self.tree.column("#0", width=0, stretch=tk.NO) # Hide the default tree column
-        self.tree.column("Tasks", width=360, anchor="w")
+        self.task_entry = tk.Entry(entry_frame, width=28, font=("Arial", 12), bd=2, relief="groove")
+        self.task_entry.pack(side=tk.LEFT, padx=5, ipady=4, expand=True, fill="x")
+        self.task_entry.bind("<Return>", lambda event: self.add_task()) # Press enter shortcut
         
-        # Set up custom font for the Treeview rows
-        style = ttk.Style()
-        style.configure("Treeview", font=("Arial", 11))
+        add_btn = tk.Button(entry_frame, text="Add Task", command=self.add_task, bg="#2ecc71", fg="white", font=("Arial", 10, "bold"), relief="flat", padx=12)
+        add_btn.pack(side=tk.LEFT, padx=5)
         
-        # CREATE COLOR TAGS: This maps names like 'done' and 'pending' to specific text colors
-        self.tree.tag_configure("done", foreground="#27ae60")     # Nice dark green
-        self.tree.tag_configure("pending", foreground="#c0392b")  # Nice dark red
+        # 3. Main Task Display (Treeview List)
+        display_frame = tk.Frame(self.root, bg="#f8f9fa")
+        display_frame.pack(pady=15, padx=20, fill=tk.BOTH, expand=True)
         
-        # Action Buttons Frame
-        self.btn_frame = tk.Frame(root)
-        self.btn_frame.pack(pady=10)
+        scrollbar = ttk.Scrollbar(display_frame)
+        scrollbar.pack(side=tk.RIGHT, fill="y")
         
-        self.complete_button = tk.Button(self.btn_frame, text="Mark Complete", command=self.mark_complete, bg="blue", fg="white")
-        self.complete_button.pack(side=tk.LEFT, padx=10)
+        self.tree = ttk.Treeview(display_frame, columns=("Tasks"), show="", height=12, yscrollcommand=scrollbar.set)
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=self.tree.yview)
         
-        self.delete_button = tk.Button(self.btn_frame, text="Delete Task", command=self.delete_task, bg="red", fg="white")
-        self.delete_button.pack(side=tk.LEFT, padx=10)
+        self.tree.column("#0", width=0, stretch=tk.NO)
+        self.tree.column("Tasks", anchor="w")
         
-        # Load any existing tasks immediately upon starting the app
-        self.load_data()
+        # Setup specific row highlights
+        self.tree.tag_configure("done", foreground="#95a5a6") # Greyed out for finished tasks
+        self.tree.tag_configure("pending", foreground="#2c3e50") # Strong color for active tasks
         
-    # --- STORAGE OPERATIONS ---
-    def save_data(self):
-        """Saves the current todo_list array into a text file using JSON format."""
+        # DOUBLE CLICK SHORTCUT: Triggers rapid mark complete
+        self.tree.bind("<Double-1>", lambda event: self.toggle_task_shortcut())
+        
+        # 4. Standard Action Buttons Frame
+        btn_frame = tk.Frame(self.root, bg="#f8f9fa")
+        btn_frame.pack(pady=10)
+        
+        complete_btn = tk.Button(btn_frame, text="✔️ Mark Complete", command=self.mark_complete, bg="#3498db", fg="white", font=("Arial", 10, "bold"), relief="flat", padx=12, pady=6)
+        complete_btn.pack(side=tk.LEFT, padx=10)
+        
+        delete_btn = tk.Button(btn_frame, text="🗑️ Delete Task", command=self.delete_task, bg="#e74c3c", fg="white", font=("Arial", 10, "bold"), relief="flat", padx=12, pady=6)
+        delete_btn.pack(side=tk.LEFT, padx=10)
+        
+        # 5. Hidden Undo Alert Bar (Only shows up right after a deletion)
+        self.undo_frame = tk.Frame(self.root, bg="#f39c12", height=40)
+        self.undo_label = tk.Label(self.undo_frame, text="Task deleted.", bg="#f39c12", fg="white", font=("Arial", 10, "bold"))
+        self.undo_label.pack(side=tk.LEFT, padx=15, pady=5)
+        
+        undo_btn = tk.Button(self.undo_frame, text="UNDO ↩️", command=self.undo_last_deletion, bg="#d35400", fg="white", font=("Arial", 9, "bold"), relief="flat", padx=8)
+        undo_btn.pack(side=tk.RIGHT, padx=15, pady=5)
+
+    # --- MEMORY DISK SAVE OPERATIONS ---
+    def save_tasks_to_disk(self):
+        """Saves current state into local JSON file automatically."""
         try:
             with open(DATA_FILE, "w") as file:
                 json.dump(self.todo_list, file, indent=4)
-        except Exception as e:
-            messagebox.showerror("Error", f"Could not save your tasks: {e}")
+        except Exception as error:
+            messagebox.showerror("Saving Error", f"Couldn't save your tasks: {error}")
 
-    def load_data(self):
-        """Looks for a saved file and populates the tree view if found."""
+    def load_saved_tasks(self):
+        """Loads tasks from storage when the app opens up."""
         if os.path.exists(DATA_FILE):
             try:
                 with open(DATA_FILE, "r") as file:
                     self.todo_list = json.load(file)
-                self.update_listbox()
+                self.refresh_display()
             except Exception:
                 self.todo_list = []
 
-    # --- FUNCTIONALITY ---
-    def update_listbox(self):
-        """Refreshes the visible display using the data in self.todo_list and applies colors."""
-        # Clear current view
+    # --- APPLICATION ENGINE LOGIC ---
+    def refresh_display(self):
+        """Sorts the array data and updates treeview layout visualization."""
+        # Hide the undo bar on every general refresh step unless called specifically
+        self.undo_frame.pack_forget()
+        
+        # Wipes visual drawing clean
         for item in self.tree.get_children():
             self.tree.delete(item)
             
-        # Re-populate with color tags applied
-        for item in self.todo_list:
+        # SUGGESTION 1 IMPLEMENTED: Sort tasks so pending stay high, finished sink down low
+        sorted_list = sorted(self.todo_list, key=lambda k: k["completed"])
+        
+        # Re-map our basic array pointer so tracking matches user expectations
+        self.todo_list = sorted_list
+        
+        # Draw everything back nicely with icons
+        for index, item in enumerate(self.todo_list):
             if item["completed"]:
-                status_text = f"✅ [Done]  {item['task']}"
-                # The tags="done" argument applies the green text color we configured earlier
-                self.tree.insert("", tk.END, values=(status_text,), tags=("done",))
+                display_text = f" ✅  [Done]   {item['task']}"
+                # Added strikethrough symbol style simulation if desired, or basic clean tag styling
+                self.tree.insert("", tk.END, iid=index, values=(display_text,), tags=("done",))
             else:
-                status_text = f"❌ [Pending]  {item['task']}"
-                # The tags="pending" argument applies the red text color
-                self.tree.insert("", tk.END, values=(status_text,), tags=("pending",))
+                display_text = f" ❌  [Pending]   {item['task']}"
+                self.tree.insert("", tk.END, iid=index, values=(display_text,), tags=("pending",))
 
     def add_task(self):
-        """Grabs text from entry field and saves it."""
+        """Appends new dictionary values into core map files."""
         task_name = self.task_entry.get().strip()
         if task_name:
             self.todo_list.append({"task": task_name, "completed": False})
-            self.update_listbox()
-            self.save_data()
+            self.refresh_display()
+            self.save_tasks_to_disk()
             self.task_entry.delete(0, tk.END)
         else:
-            messagebox.showwarning("Warning", "Task cannot be empty!")
+            messagebox.showwarning("Empty Task", "Please type something before clicking add!")
 
-    def get_selected_index(self):
-        """Helper function to find which row number is currently clicked."""
+    def get_selected_row_index(self):
+        """Helper engine tool to locate index identity values accurately."""
         selected_item = self.tree.selection()
         if not selected_item:
-            raise IndexError
-        # Find the position index of the clicked row item
-        return self.tree.index(selected_item[0])
+            return None
+        # Since we force numerical mapping inside visual insert lines, conversion is direct
+        return int(selected_item[0])
 
     def mark_complete(self):
-        """Marks the selected item as finished."""
-        try:
-            selected_index = self.get_selected_index()
-            self.todo_list[selected_index]["completed"] = True
-            self.update_listbox()
-            self.save_data()
-        except IndexError:
-            messagebox.showwarning("Warning", "Please select a task from the list first!")
+        """Switches active values to finished for selected items."""
+        index = self.get_selected_row_index()
+        if index is not None:
+            self.todo_list[index]["completed"] = True
+            self.refresh_display()
+            self.save_tasks_to_disk()
+        else:
+            messagebox.showwarning("Selection Missing", "Click on a task from the list first to complete it!")
+
+    # SUGGESTION 2 IMPLEMENTED: Easy double click logic to toggle status values instantly
+    def toggle_task_shortcut(self):
+        """Double click toggle shortcut rule engine."""
+        index = self.get_selected_row_index()
+        if index is not None:
+            # Flips whatever the boolean condition value currently holds
+            self.todo_list[index]["completed"] = not self.todo_list[index]["completed"]
+            self.refresh_display()
+            self.save_tasks_to_disk()
 
     def delete_task(self):
-        """Removes the selected item from the array and display."""
-        try:
-            selected_index = self.get_selected_index()
-            self.todo_list.pop(selected_index)
-            self.update_listbox()
-            self.save_data()
-        except IndexError:
-            messagebox.showwarning("Warning", "Please select a task to delete!")
+        """Deletes items while safely copying values to temporary storage."""
+        index = self.get_selected_row_index()
+        if index is not None:
+            # Store item metadata details before destroying lines completely
+            removed_item = self.todo_list.pop(index)
+            self.recently_deleted = {"item": removed_item, "original_index": index}
+            
+            self.refresh_display()
+            self.save_tasks_to_disk()
+            
+            # SUGGESTION 3 IMPLEMENTED: Reveal toast banner block tracking options
+            self.undo_label.config(text=f"Deleted: \"{removed_item['task']}\"")
+            self.undo_frame.pack(fill="x", side=tk.BOTTOM)
+        else:
+            messagebox.showwarning("Selection Missing", "Click on a task from the list first to remove it!")
+
+    def undo_last_deletion(self):
+        """Pulls old dictionary entries from backup and returns them onto the screen."""
+        if self.recently_deleted:
+            data = self.recently_deleted["item"]
+            # Inject records back into baseline memory
+            self.todo_list.append(data)
+            
+            # Wipe backup registry keys
+            self.recently_deleted = None
+            
+            self.refresh_display()
+            self.save_tasks_to_disk()
+            self.undo_frame.pack_forget()
 
 if __name__ == "__main__":
     root = tk.Tk()
